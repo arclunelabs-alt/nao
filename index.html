@@ -9,13 +9,13 @@
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg:#fbfaf7; --text:#1d1b17; --muted:#756f63; --line:#e4e0d6; --fill:#f1eee6;
+  --bg:#f1efe9; --surface:#fbfaf7; --text:#1d1b17; --muted:#756f63; --line:#e2ded3; --fill:#ebe7dc;
   --accent:#8c6a1f; --on-accent:#fff; --err:#b23b30;
   --serif:"Instrument Serif",Georgia,"Times New Roman",serif;
   --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#121110; --text:#e9e5dc; --muted:#8d877b; --line:#2a2723; --fill:#1b1917;
+  --bg:#0d0c0b; --surface:#171513; --text:#e9e5dc; --muted:#8d877b; --line:#272421; --fill:#221f1c;
   --accent:#c9a24d; --on-accent:#17130a; --err:#e0705f;
 }}
 *{box-sizing:border-box}
@@ -65,13 +65,52 @@ textarea:focus{outline:none;border-color:var(--accent)}
 .send:disabled{opacity:.4;cursor:default}
 .send:focus-visible,header button:focus-visible,.copy:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+.menu{display:flex;padding:6px;margin-left:-6px;color:var(--text)}
+header{justify-content:flex-start;gap:14px}
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .24s;z-index:10}
+.drawer{position:fixed;top:0;bottom:0;left:0;width:min(84vw,320px);background:var(--bg);border-right:1px solid var(--line);
+  transform:translateX(-100%);visibility:hidden;transition:transform .26s ease,visibility 0s .26s;z-index:11;display:flex;flex-direction:column;
+  padding:calc(env(safe-area-inset-top,0px) + 16px) 12px calc(env(safe-area-inset-bottom,0px) + 12px)}
+body.open .scrim{opacity:1;pointer-events:auto}
+body.open .drawer{transform:none;visibility:visible;transition-delay:0s}
+.new{width:100%;margin-bottom:22px;padding:11px;border:1px solid var(--accent);border-radius:4px;background:none;color:var(--accent);font:inherit;font-weight:600;cursor:pointer;transition:background .15s}
+.new:hover{background:var(--fill)}
+.label{padding:0 10px 6px;color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase}
+#list{flex:1;overflow-y:auto;list-style:none;margin:0;padding:0}
+#list li{display:flex;align-items:center;border-left:2px solid transparent;border-radius:0 4px 4px 0}
+#list li.active{background:var(--fill);border-left-color:var(--accent)}
+#list li.none{color:var(--muted);font-size:14px;padding:8px 10px}
+.pick{flex:1;min-width:0;padding:11px 10px;background:none;border:0;color:var(--text);font:inherit;font-size:15px;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.del{padding:8px 12px;background:none;border:0;color:var(--muted);font-size:20px;line-height:1;cursor:pointer;transition:color .15s}
+.del:hover{color:var(--err)}
+.pick:focus-visible,.del:focus-visible,.new:focus-visible,.menu:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+header,form{background:var(--surface)}
+.msg.user{border-radius:18px 18px 4px 18px;padding:10px 16px}
+.msg.nao{background:var(--surface);border:1px solid var(--line);border-radius:4px 18px 18px 18px;padding:12px 16px}
+.msg.err{border-color:var(--err)}
+.msg.nao pre{background:var(--bg);border-radius:10px}
+.copy{background:var(--surface);border-radius:6px}
+textarea{border-radius:18px;padding:11px 16px}
+.send{border-radius:18px;padding:11px 22px}
+.drawer{background:var(--surface);border-radius:0 22px 22px 0}
+.new{border-radius:14px}
+#list li,#list li.active{border-left:0;border-radius:12px}
+.menu{border-radius:10px}
 </style>
 </head>
 <body>
 <header>
+  <button class="menu" id="menu" type="button" aria-label="Buka daftar chat" aria-expanded="false">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+  </button>
   <h1>Nao<span>.</span></h1>
-  <button id="clear" type="button">Hapus chat</button>
 </header>
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="Daftar chat" aria-hidden="true">
+  <button class="new" id="new" type="button">Chat baru</button>
+  <div class="label">Terbaru</div>
+  <ul id="list"></ul>
+</aside>
 <main id="scroll"><div class="wrap" id="log"></div></main>
 <form id="form">
   <div class="row">
@@ -89,9 +128,19 @@ const scroller = document.getElementById("scroll");
 const input = document.getElementById("input");
 const send = document.getElementById("send");
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-let history = [];
-try { history = JSON.parse(localStorage.getItem("nao-chat") || "[]"); } catch (e) {}
-const save = () => { try { localStorage.setItem("nao-chat", JSON.stringify(history.slice(-60))); } catch (e) {} };
+let chats = [], cur = null, history = [], busy = false;
+function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+try {
+  const s = JSON.parse(localStorage.getItem("nao-chats") || "null");
+  if (s) { chats = s.chats || []; cur = s.cur; }
+  else {
+    const old = JSON.parse(localStorage.getItem("nao-chat") || "[]");
+    if (old.length) { const c = { id: uid(), title: old[0].text.slice(0, 40), updated: Date.now(), messages: old }; chats = [c]; cur = c.id; }
+  }
+} catch (e) {}
+const chatNow = () => chats.find(c => c.id === cur);
+history = chatNow() ? chatNow().messages : [];
+const save = () => { try { localStorage.setItem("nao-chats", JSON.stringify({ chats: chats.slice(0, 50).map(c => ({ ...c, messages: c.messages.slice(-60) })), cur })); } catch (e) {} };
 
 /* ---------- markdown ringan ---------- */
 const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -168,7 +217,13 @@ function render() {
 async function submit() {
   const text = input.value.trim();
   if (!text || send.disabled) return;
+  if (!chatNow()) {
+    const c = { id: uid(), title: text.slice(0, 40), updated: Date.now(), messages: [] };
+    chats.unshift(c); cur = c.id; history = c.messages; renderList();
+  }
   if (!history.length) log.innerHTML = "";
+  chatNow().updated = Date.now();
+  busy = true;
   history.push({ role: "user", text });
   add("user", text, "", true);
   input.value = ""; input.style.height = "auto";
@@ -189,19 +244,68 @@ async function submit() {
     await reveal(wait, data.reply);
   } catch (e) {
     history.pop();
+    if (!history.length) { chats = chats.filter(c => c.id !== cur); cur = null; }
     wait.className = "msg nao err";
     wait.textContent = "Pesan gagal terkirim: " + e.message + ". Coba kirim lagi.";
     input.value = text;
   }
+  busy = false;
   send.disabled = false;
+  renderList();
   input.focus();
 }
 
 document.getElementById("form").addEventListener("submit", e => { e.preventDefault(); submit(); });
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 150) + "px"; });
-document.getElementById("clear").addEventListener("click", () => {
-  if (history.length && confirm("Hapus semua chat?")) { history = []; save(); render(); }
-});
+const menu = document.getElementById("menu"), list = document.getElementById("list");
+function setDrawer(open) {
+  document.body.classList.toggle("open", open);
+  menu.setAttribute("aria-expanded", open);
+  document.getElementById("drawer").setAttribute("aria-hidden", !open);
+}
+function renderList() {
+  list.innerHTML = "";
+  if (!chats.length) { const n = document.createElement("li"); n.className = "none"; n.textContent = "Belum ada chat"; list.appendChild(n); return; }
+  [...chats].sort((a, b) => b.updated - a.updated).forEach(c => {
+    const li = document.createElement("li");
+    if (c.id === cur) li.className = "active";
+    const pick = document.createElement("button");
+    pick.className = "pick"; pick.type = "button"; pick.textContent = c.title || "Chat baru";
+    pick.onclick = () => openChat(c.id);
+    const del = document.createElement("button");
+    del.className = "del"; del.type = "button"; del.textContent = "\u00d7"; del.setAttribute("aria-label", "Hapus chat");
+    del.onclick = () => removeChat(c.id);
+    li.append(pick, del); list.appendChild(li);
+  });
+}
+function openChat(id) {
+  if (busy) return;
+  cur = id; history = chatNow() ? chatNow().messages : [];
+  save(); render(); renderList(); setDrawer(false); down();
+}
+function newChat() {
+  if (busy) return;
+  cur = null; history = []; save(); render(); renderList(); setDrawer(false);
+}
+function removeChat(id) {
+  if (busy || !confirm("Hapus chat ini?")) return;
+  chats = chats.filter(c => c.id !== id);
+  if (cur === id) { cur = null; history = []; render(); }
+  save(); renderList();
+}
+menu.addEventListener("click", () => setDrawer(!document.body.classList.contains("open")));
+document.getElementById("scrim").addEventListener("click", () => setDrawer(false));
+document.getElementById("new").addEventListener("click", newChat);
+document.addEventListener("keydown", e => { if (e.key === "Escape") setDrawer(false); });
+let tx = null;
+document.addEventListener("touchstart", e => { tx = e.touches[0].clientX; }, { passive: true });
+document.addEventListener("touchend", e => {
+  if (tx === null) return;
+  const dx = e.changedTouches[0].clientX - tx, open = document.body.classList.contains("open");
+  if (!open && tx < 24 && dx > 70) setDrawer(true);
+  if (open && dx < -70) setDrawer(false);
+  tx = null;
+}, { passive: true });
 log.addEventListener("click", e => {
   const b = e.target.closest(".copy");
   if (!b) return;
@@ -212,7 +316,7 @@ log.addEventListener("click", e => {
     try { document.execCommand("copy"); ok(); } catch (_) {} t.remove();
   });
 });
-render();
+render(); renderList();
 </script>
 </body>
 </html>
