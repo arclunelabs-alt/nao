@@ -109,6 +109,17 @@ textarea:focus{border-color:transparent}
 .speak{display:block;margin-top:10px;padding:3px 14px;background:none;border:1px solid var(--line);border-radius:14px;color:var(--muted);font:inherit;font-size:13px;cursor:pointer;transition:color .15s,border-color .15s}
 .speak:hover{color:var(--accent);border-color:var(--accent)}
 .speak:disabled{opacity:.6;cursor:default}
+#list li.head{margin-top:8px;padding:0 10px 6px;color:var(--muted);font-size:12px;letter-spacing:.08em;text-transform:uppercase;border-left:0}
+#list li.head:first-child{margin-top:0}
+.more{display:grid;place-items:center;padding:8px 10px;background:none;border:0;color:var(--muted);cursor:pointer;border-radius:10px;transition:color .15s}
+.more:hover{color:var(--accent)}
+.more:focus-visible,.pop button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.rename{flex:1;min-width:0;margin:4px 6px;padding:7px 10px;border:1px solid var(--accent);border-radius:10px;background:var(--bg);color:var(--text);font:inherit;font-size:15px}
+.rename:focus{outline:none}
+.pop{position:fixed;z-index:12;min-width:190px;padding:6px;background:var(--surface);border:1px solid var(--line);border-radius:14px;animation:in .15s ease-out both}
+.pop button{display:block;width:100%;padding:10px 12px;background:none;border:0;border-radius:10px;color:var(--text);font:inherit;font-size:15px;text-align:left;cursor:pointer}
+.pop button:hover{background:var(--fill)}
+.pop button.danger{color:var(--err)}
 </style>
 </head>
 <body>
@@ -121,7 +132,6 @@ textarea:focus{border-color:transparent}
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-label="Daftar chat" aria-hidden="true">
   <button class="new" id="new" type="button">Chat baru</button>
-  <div class="label">Terbaru</div>
   <ul id="list"></ul>
 </aside>
 <main id="scroll"><div class="wrap" id="log"></div></main>
@@ -273,25 +283,62 @@ document.getElementById("form").addEventListener("submit", e => { e.preventDefau
 input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 150) + "px"; });
 const menu = document.getElementById("menu"), list = document.getElementById("list");
 function setDrawer(open) {
+  if (!open) closeMenu();
   document.body.classList.toggle("open", open);
   menu.setAttribute("aria-expanded", open);
   document.getElementById("drawer").setAttribute("aria-hidden", !open);
 }
 function renderList() {
+  closeMenu();
   list.innerHTML = "";
   if (!chats.length) { const n = document.createElement("li"); n.className = "none"; n.textContent = "Belum ada chat"; list.appendChild(n); return; }
-  [...chats].sort((a, b) => b.updated - a.updated).forEach(c => {
+  const sorted = [...chats].sort((a, b) => b.updated - a.updated);
+  const pinned = sorted.filter(c => c.pinned), rest = sorted.filter(c => !c.pinned);
+  const head = t => { const h = document.createElement("li"); h.className = "head"; h.textContent = t; list.appendChild(h); };
+  const item = c => {
     const li = document.createElement("li");
     if (c.id === cur) li.className = "active";
     const pick = document.createElement("button");
     pick.className = "pick"; pick.type = "button"; pick.textContent = c.title || "Chat baru";
     pick.onclick = () => openChat(c.id);
-    const del = document.createElement("button");
-    del.className = "del"; del.type = "button"; del.textContent = "\u00d7"; del.setAttribute("aria-label", "Hapus chat");
-    del.onclick = () => removeChat(c.id);
-    li.append(pick, del); list.appendChild(li);
-  });
+    const more = document.createElement("button");
+    more.className = "more"; more.type = "button"; more.setAttribute("aria-label", "Opsi chat");
+    more.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
+    more.onclick = e => { e.stopPropagation(); openMenu(c, more); };
+    li.append(pick, more); list.appendChild(li);
+  };
+  if (pinned.length) { head("Disematkan"); pinned.forEach(item); }
+  if (rest.length) { head("Terbaru"); rest.forEach(item); }
 }
+let pop = null;
+function closeMenu() { if (pop) { pop.remove(); pop = null; } }
+function openMenu(c, anchor) {
+  closeMenu();
+  pop = document.createElement("div"); pop.className = "pop";
+  [["Ganti nama", () => startRename(c, anchor)],
+   [c.pinned ? "Lepas sematan" : "Sematkan", () => { c.pinned = !c.pinned; save(); renderList(); }],
+   ["Hapus", () => removeChat(c.id), "danger"]].forEach(([t, fn, cls]) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = t; if (cls) b.className = cls;
+    b.onclick = () => { closeMenu(); fn(); };
+    pop.appendChild(b);
+  });
+  document.getElementById("drawer").appendChild(pop);
+  const r = anchor.getBoundingClientRect();
+  pop.style.top = Math.max(12, Math.min(r.bottom + 4, innerHeight - pop.offsetHeight - 12)) + "px";
+  pop.style.left = Math.max(12, r.right - pop.offsetWidth) + "px";
+}
+function startRename(c, anchor) {
+  const li = anchor.parentElement, pick = li.querySelector(".pick");
+  const inp = document.createElement("input");
+  inp.className = "rename"; inp.value = c.title || ""; inp.maxLength = 60; inp.setAttribute("aria-label", "Nama chat");
+  li.replaceChild(inp, pick); inp.focus(); inp.select();
+  let done = false;
+  const finish = ok => { if (done) return; done = true; if (ok) { const v = inp.value.trim(); if (v) c.title = v; save(); } renderList(); };
+  inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); finish(true); } if (e.key === "Escape") finish(false); });
+  inp.addEventListener("blur", () => finish(true));
+}
+document.addEventListener("click", e => { if (pop && !pop.contains(e.target)) closeMenu(); });
 function openChat(id) {
   if (busy) return;
   cur = id; history = chatNow() ? chatNow().messages : [];
